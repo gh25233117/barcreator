@@ -81,8 +81,8 @@ def create_bars_wrapper(arg):
 def create_bars(date, symbol, bar_interval_mins, save_dir):
     save_path = os.path.join(save_dir, '_'.join([symbol, date, str(bar_interval_mins)])) + '.csv'
 
-    if os.path.exists(save_path):
-        return
+    # if os.path.exists(save_path):
+    #     return
 
     def gz2df(path, dtype):
         columns = [d[0] for d in dtype]
@@ -138,26 +138,29 @@ def create_bars(date, symbol, bar_interval_mins, save_dir):
         elif 'deriv' in p:
             deriv_path = os.path.join(DATA_DIR, p)
     try:
+        needed_cols = ['timestamp', 'ask_amount', 'bid_price', 'bid_amount', 'ask_price', 'ask_amount', 'open_interest', 'funding_rate', 'side', 'amount', 'price']
         q_df = gz2df(quote_path, DTYPES['quotes'])
+        q_df.drop(columns=list(filter(lambda x: x not in needed_cols, q_df.columns)), inplace=True)
         t_df = gz2df(trade_path, DTYPES['trades'])
+        t_df.drop(columns=list(filter(lambda x: x not in needed_cols, t_df.columns)), inplace=True)
         d_df = gz2df(deriv_path, DTYPES['deriv'])
+        d_df.drop(columns=list(filter(lambda x: x not in needed_cols, d_df.columns)), inplace=True)
     except TypeError:
         print(f'Error: {date} - {symbol}')
         return
     q_df['wm'] = (q_df.ask_amount * q_df.bid_price + q_df.bid_amount * q_df.ask_price) / (q_df.bid_amount + q_df.ask_amount)
+    t_df['side'] = t_df['side'].map({"buy": 1, "sell": -1})
     q_df['timestamp'] = pd.to_datetime(q_df['timestamp'], unit='us')
     t_df['timestamp'] = pd.to_datetime(t_df['timestamp'], unit='us')
     d_df['timestamp'] = pd.to_datetime(d_df['timestamp'], unit='us')
     q_df.set_index('timestamp', inplace=True)
     t_df.set_index('timestamp', inplace=True)
     d_df.set_index('timestamp', inplace=True)
-    q_df.drop(columns=['exchange', 'symbol', 'local_timestamp'], inplace=True)
     df = q_df.join(t_df)
     del q_df
     del t_df
     gc.collect()
 
-    df.drop(columns=['exchange', 'symbol', 'local_timestamp'], inplace=True)
     df = df.join(d_df)
     del d_df
     gc.collect()
@@ -169,15 +172,22 @@ def create_bars(date, symbol, bar_interval_mins, save_dir):
     bars = pd.DataFrame(index=bar_boundaries)
 
     merged_data = pd.merge(bars, df, left_index=True, right_index=True, how='outer').fillna(method='ffill')
+    del bars
+    del df
+    gc.collect()
+
     merged_data['O'] = merged_data['wm']
     merged_data['H'] = merged_data['wm']
     merged_data['L'] = merged_data['wm']
     merged_data['C'] = merged_data['wm']
     merged_data['V'] = merged_data['amount']
+    merged_data['TWAP'] = merged_data['wm']
     merged_data['OI'] = merged_data['open_interest']
     merged_data['FR'] = merged_data['funding_rate']
     merged_data['HT'] = merged_data['wm']
     merged_data['LT'] = merged_data['wm']
+    merged_data['SV'] = merged_data['side'] * merged_data['amount']
+    merged_data['PV'] = merged_data['amount'] * merged_data['price']
 
     df = merged_data.resample(str(bar_interval_mins) + 'T').apply({
         'O': 'first',
@@ -185,12 +195,17 @@ def create_bars(date, symbol, bar_interval_mins, save_dir):
         'L': 'min',
         'C': 'last',
         'V': 'sum',
+        'TWAP': 'mean',
         'FR': 'last',
         'OI': 'last',
         'HT': lambda x: x.idxmax(),
         'LT': lambda x: x.idxmin(),
-
+        'SV': 'sum',
+        'PV': 'sum',
     })
+
+    del merged_data
+    gc.collect()
 
     df.to_csv(save_path, header=0)
     del df
