@@ -18,7 +18,7 @@ API_KEY = "TD.7nY1VBeQdUxxMyMK.BDpk0GcNRMraF7E.Xnov8iHJGsDqKgF.ELjyVH474rltzA7.k
 DATA_DIR = os.path.join(os.getcwd(), "datasets")
 SAVE_DIR = os.path.join(os.getcwd(), 'bars')
 BAR_INTERVAL_MINS = 7
-MAX_PROCESSES = 3
+MAX_PROCESSES = 2
 
 
 def get_date_range_by_month(start_date_str, end_date_str):
@@ -81,8 +81,8 @@ def create_bars_wrapper(arg):
 def create_bars(date, symbol, bar_interval_mins, save_dir):
     save_path = os.path.join(save_dir, '_'.join([symbol, date, str(bar_interval_mins)])) + '.csv'
 
-    # if os.path.exists(save_path):
-    #     return
+    if os.path.exists(save_path):
+        return
 
     def gz2df(path, dtype):
         columns = [d[0] for d in dtype]
@@ -143,8 +143,6 @@ def create_bars(date, symbol, bar_interval_mins, save_dir):
         q_df.drop(columns=list(filter(lambda x: x not in needed_cols, q_df.columns)), inplace=True)
         t_df = gz2df(trade_path, DTYPES['trades'])
         t_df.drop(columns=list(filter(lambda x: x not in needed_cols, t_df.columns)), inplace=True)
-        d_df = gz2df(deriv_path, DTYPES['deriv'])
-        d_df.drop(columns=list(filter(lambda x: x not in needed_cols, d_df.columns)), inplace=True)
     except TypeError:
         print(f'Error: {date} - {symbol}')
         return
@@ -152,15 +150,22 @@ def create_bars(date, symbol, bar_interval_mins, save_dir):
     t_df['side'] = t_df['side'].map({"buy": 1, "sell": -1})
     q_df['timestamp'] = pd.to_datetime(q_df['timestamp'], unit='us')
     t_df['timestamp'] = pd.to_datetime(t_df['timestamp'], unit='us')
-    d_df['timestamp'] = pd.to_datetime(d_df['timestamp'], unit='us')
     q_df.set_index('timestamp', inplace=True)
     t_df.set_index('timestamp', inplace=True)
-    d_df.set_index('timestamp', inplace=True)
+
     df = q_df.join(t_df)
     del q_df
     del t_df
     gc.collect()
 
+    try:
+        d_df = gz2df(deriv_path, DTYPES['deriv'])
+        d_df.drop(columns=list(filter(lambda x: x not in needed_cols, d_df.columns)), inplace=True)
+    except TypeError:
+        print(f'Error: {date} - {symbol}')
+        return
+    d_df['timestamp'] = pd.to_datetime(d_df['timestamp'], unit='us')
+    d_df.set_index('timestamp', inplace=True)
     df = df.join(d_df)
     del d_df
     gc.collect()
