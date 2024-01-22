@@ -138,7 +138,7 @@ def create_bars(date, symbol, bar_interval_mins, save_dir):
         elif 'deriv' in p:
             deriv_path = os.path.join(DATA_DIR, p)
     try:
-        needed_cols = ['timestamp', 'ask_amount', 'bid_price', 'bid_amount', 'ask_price', 'ask_amount', 'open_interest', 'funding_rate', 'side', 'amount', 'price']
+        needed_cols = ['timestamp', 'ask_amount', 'bid_price', 'bid_amount', 'ask_price', 'open_interest', 'funding_rate', 'side', 'amount', 'price']
         q_df = gz2df(quote_path, DTYPES['quotes'])
         q_df.drop(columns=list(filter(lambda x: x not in needed_cols, q_df.columns)), inplace=True)
         t_df = gz2df(trade_path, DTYPES['trades'])
@@ -154,6 +154,7 @@ def create_bars(date, symbol, bar_interval_mins, save_dir):
     t_df.set_index('timestamp', inplace=True)
 
     df = q_df.join(t_df)
+    df.drop(columns=['ask_amount', 'bid_price', 'bid_amount', 'ask_price'], inplace=True)
     del q_df
     del t_df
     gc.collect()
@@ -175,9 +176,9 @@ def create_bars(date, symbol, bar_interval_mins, save_dir):
     bar_interval = pd.Timedelta(minutes=bar_interval_mins)
     bar_boundaries = pd.date_range(start=nearest_midnight, end=df.index.max(), freq=bar_interval)
     bars = pd.DataFrame(index=bar_boundaries)
-
     merged_data = pd.merge(bars, df, left_index=True, right_index=True, how='outer').fillna(method='ffill')
     del bars
+    del bar_boundaries
     del df
     gc.collect()
 
@@ -185,14 +186,18 @@ def create_bars(date, symbol, bar_interval_mins, save_dir):
     merged_data['H'] = merged_data['wm']
     merged_data['L'] = merged_data['wm']
     merged_data['C'] = merged_data['wm']
-    merged_data['V'] = merged_data['amount']
     merged_data['TWAP'] = merged_data['wm']
-    merged_data['OI'] = merged_data['open_interest']
-    merged_data['FR'] = merged_data['funding_rate']
     merged_data['HT'] = merged_data['wm']
     merged_data['LT'] = merged_data['wm']
-    merged_data['SV'] = merged_data['side'] * merged_data['amount']
+    merged_data.drop(columns=['wm'], inplace=True)
+    merged_data['V'] = merged_data['amount']
     merged_data['PV'] = merged_data['amount'] * merged_data['price']
+    merged_data['SV'] = merged_data['side'] * merged_data['amount']
+    merged_data.drop(columns=["amount", "side", "price"], inplace=True)
+    merged_data['OI'] = merged_data['open_interest']
+    merged_data['FR'] = merged_data['funding_rate']
+    merged_data.drop(columns=["open_interest", "funding_rate"], inplace=True)
+    gc.collect()
 
     df = merged_data.resample(str(bar_interval_mins) + 'T').apply({
         'O': 'first',
@@ -208,7 +213,6 @@ def create_bars(date, symbol, bar_interval_mins, save_dir):
         'SV': 'sum',
         'PV': 'sum',
     })
-
     del merged_data
     gc.collect()
 
@@ -257,7 +261,22 @@ def main():
         this_to_date_shifted_dt += timedelta(days=1)
         this_to_date_shifted = this_to_date_shifted_dt.strftime('%Y-%m-%d')
 
-        this_symbols = p[1]
+        # Don't redownload things we already have
+        date_range = [str(d).split(' ')[0] for d in pd.date_range(start=this_from_date, end=this_to_date)]
+        date_range = [int(d.replace('-','')) for d in date_range]
+        this_symbols = []
+        for s in p[1]:
+            files = list(sorted(filter(lambda x: s in x, os.listdir(SAVE_DIR))))
+            dates = [f.split('_')[1].split('.')[0] for f in files]
+            dates = [int(d.replace('-','')) for d in dates]
+            dates = list(filter(lambda x : x >= date_range[0] and x <= date_range[-1], dates))
+            if len(dates) != len(date_range):
+                this_symbols.append(s)
+
+        if not this_symbols:
+            print(f'Skipping {p[1]} from {this_from_date} to {this_to_date_shifted}')
+            continue
+
         print(f'Downloading bars for {this_symbols} from {this_from_date} to {this_to_date_shifted}')
         start_time = time.time()
         download_func(from_date=this_from_date, to_date=this_to_date_shifted, symbols=this_symbols)
